@@ -5,7 +5,15 @@ import { db } from '../firebaseAdmin.js';
 // @access  Private
 const addOrderItems = async (req, res, next) => {
     try {
-        const { product: productId, type, rentalStartDate, rentalEndDate, totalPrice } = req.body;
+        const {
+            product: productId,
+            type,
+            rentalStartDate,
+            rentalEndDate,
+            totalPrice,
+            shippingAddress,
+            campusDetails
+        } = req.body;
 
         const productRef = db.ref(`products/${productId}`);
         const productSnapshot = await productRef.once('value');
@@ -31,6 +39,8 @@ const addOrderItems = async (req, res, next) => {
             rentalStartDate: rentalStartDate || null,
             rentalEndDate: rentalEndDate || null,
             totalPrice: Number(totalPrice),
+            shippingAddress: shippingAddress || '',
+            campusDetails: campusDetails || '',
             status: 'Pending',
             createdAt: Date.now()
         };
@@ -59,19 +69,38 @@ const getMyOrders = async (req, res, next) => {
         }
 
         const currentUserId = req.user.uid || req.user._id;
+        const userRole = req.user.role;
         let orders = [];
 
-        // Loop through orders and manually populate the product
         for (const [key, val] of Object.entries(snapshot.val())) {
+            let isMatch = false;
+
+            // Match for Buyer
             if (val.buyer === currentUserId || (val.buyer && val.buyer.uid === currentUserId)) {
-                // Populate product manually
-                if (val.product) {
-                    const prodSnap = await db.ref(`products/${val.product}`).once('value');
-                    if (prodSnap.exists()) {
-                        val.product = { id: prodSnap.key, ...prodSnap.val() };
-                    }
+                isMatch = true;
+            }
+
+            // Populate product manually to check for Seller match
+            let productData = null;
+            if (val.product) {
+                const prodSnap = await db.ref(`products/${val.product}`).once('value');
+                if (prodSnap.exists()) {
+                    productData = { id: prodSnap.key, ...prodSnap.val() };
                 }
-                orders.push({ id: key, ...val });
+            }
+
+            // Match for Seller
+            if (userRole === 'seller' || req.user.role === 'admin') {
+                const sellerUid = productData?.seller?.uid || productData?.seller;
+                if (sellerUid === currentUserId) {
+                    isMatch = true;
+                }
+            }
+
+            if (isMatch) {
+                const orderWithProduct = { id: key, ...val };
+                if (productData) orderWithProduct.product = productData;
+                orders.push(orderWithProduct);
             }
         }
 

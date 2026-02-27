@@ -5,7 +5,7 @@ import { db } from '../firebaseAdmin.js';
 // @access  Public
 const getProducts = async (req, res, next) => {
     try {
-        const { category, type, minPrice, maxPrice, search } = req.query;
+        const { category, type, minPrice, maxPrice, search, status } = req.query;
 
         const snapshot = await db.ref('products').once('value');
         if (!snapshot.exists()) {
@@ -14,7 +14,12 @@ const getProducts = async (req, res, next) => {
 
         let products = [];
         snapshot.forEach(childSnapshot => {
-            products.push({ id: childSnapshot.key, ...childSnapshot.val() });
+            const p = childSnapshot.val();
+            // Default to Available if no status specified
+            const targetStatus = status || 'Available';
+            if (targetStatus === 'all' || p.status === targetStatus) {
+                products.push({ id: childSnapshot.key, ...p });
+            }
         });
 
         // Apply filters
@@ -67,7 +72,7 @@ const getProductById = async (req, res, next) => {
 // @access  Private/Seller
 const createProduct = async (req, res, next) => {
     try {
-        const { title, description, category, type, price } = req.body;
+        const { title, description, category, type, price, kind, area, campus } = req.body;
 
         if (!req.file) {
             res.status(400);
@@ -89,7 +94,10 @@ const createProduct = async (req, res, next) => {
             title,
             description,
             category,
-            type,
+            type: type || 'sell',
+            kind: kind || 'Used',
+            area,
+            campus,
             price: Number(price),
             image: `/uploads/${req.file.filename}`,
             status: 'Available',
