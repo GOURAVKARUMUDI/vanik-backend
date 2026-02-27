@@ -1,13 +1,18 @@
-import User from '../models/User.js';
-import Product from '../models/Product.js';
-import Order from '../models/Order.js';
+import { db } from '../firebaseAdmin.js';
 
 // @desc    Get all users
 // @route   GET /api/admin/users
 // @access  Private/Admin
 const getUsers = async (req, res, next) => {
     try {
-        const users = await User.find({});
+        const snapshot = await db.ref('users').once('value');
+        if (!snapshot.exists()) return res.json([]);
+
+        const users = [];
+        snapshot.forEach(snap => {
+            users.push({ id: snap.key, uid: snap.key, ...snap.val() });
+        });
+
         res.json(users);
     } catch (error) {
         next(error);
@@ -19,13 +24,15 @@ const getUsers = async (req, res, next) => {
 // @access  Private/Admin
 const deleteUser = async (req, res, next) => {
     try {
-        const user = await User.findById(req.params.id);
-        if (user) {
-            if (user.role === 'admin') {
+        const ref = db.ref(`users/${req.params.id}`);
+        const snapshot = await ref.once('value');
+
+        if (snapshot.exists()) {
+            if (snapshot.val().role === 'admin') {
                 res.status(400);
                 throw new Error('Cannot delete admin user');
             }
-            await User.findByIdAndDelete(req.params.id);
+            await ref.remove();
             res.json({ message: 'User removed' });
         } else {
             res.status(404);
@@ -41,11 +48,13 @@ const deleteUser = async (req, res, next) => {
 // @access  Private/Admin
 const updateProductStatus = async (req, res, next) => {
     try {
-        const product = await Product.findById(req.params.id);
-        if (product) {
-            product.status = req.body.status || product.status;
-            const updatedProduct = await product.save();
-            res.json(updatedProduct);
+        const ref = db.ref(`products/${req.params.id}`);
+        const snapshot = await ref.once('value');
+
+        if (snapshot.exists()) {
+            await ref.update({ status: req.body.status || snapshot.val().status });
+            const updated = await ref.once('value');
+            res.json({ id: updated.key, ...updated.val() });
         } else {
             res.status(404);
             throw new Error('Product not found');
@@ -60,20 +69,31 @@ const updateProductStatus = async (req, res, next) => {
 // @access  Private/Admin
 const getStats = async (req, res, next) => {
     try {
-        const usersCount = await User.countDocuments();
-        const productsCount = await Product.countDocuments();
-        const ordersCount = await Order.countDocuments();
-
-        const totalRevenue = await Order.aggregate([
-            { $match: { status: 'Completed' } },
-            { $group: { _id: null, total: { $sum: '$totalPrice' } } }
+        const [usersSnap, productsSnap, ordersSnap] = await Promise.all([
+            db.ref('users').once('value'),
+            db.ref('products').once('value'),
+            db.ref('orders').once('value')
         ]);
+
+        const usersCount = usersSnap.exists() ? usersSnap.numChildren() : 0;
+        const productsCount = productsSnap.exists() ? productsSnap.numChildren() : 0;
+        const ordersCount = ordersSnap.exists() ? ordersSnap.numChildren() : 0;
+
+        let totalRevenue = 0;
+        if (ordersSnap.exists()) {
+            ordersSnap.forEach(snap => {
+                const order = snap.val();
+                if (order.status === 'Completed' && order.totalPrice) {
+                    totalRevenue += Number(order.totalPrice);
+                }
+            });
+        }
 
         res.json({
             usersCount,
             productsCount,
             ordersCount,
-            totalRevenue: totalRevenue.length > 0 ? totalRevenue[0].total : 0,
+            totalRevenue,
         });
     } catch (error) {
         next(error);

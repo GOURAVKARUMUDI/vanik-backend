@@ -1,4 +1,4 @@
-const db = require('../config/db');
+import { db } from '../firebaseAdmin.js';
 
 // @desc    Get chat history between two users for a specific product
 // @route   GET /api/chat/:userId/:productId
@@ -6,14 +6,27 @@ const db = require('../config/db');
 const getChatHistory = async (req, res) => {
     try {
         const { userId, productId } = req.params;
-        const currentUserId = req.user.id;
+        const currentUserId = req.user.uid || req.user._id || req.user.id;
 
-        const [messages] = await db.query(`
-      SELECT * FROM Messages 
-      WHERE product_id = ? AND 
-      ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-      ORDER BY created_at ASC
-    `, [productId, currentUserId, userId, userId, currentUserId]);
+        const snapshot = await db.ref('messages').once('value');
+        if (!snapshot.exists()) return res.json([]);
+
+        let messages = [];
+        snapshot.forEach(snap => {
+            const msg = snap.val();
+            // Assuming messages schema has product_id, sender_id, receiver_id
+            if (msg.product_id === productId) {
+                if (
+                    (msg.sender_id === currentUserId && msg.receiver_id === userId) ||
+                    (msg.sender_id === userId && msg.receiver_id === currentUserId)
+                ) {
+                    messages.push({ id: snap.key, ...msg });
+                }
+            }
+        });
+
+        // Sort by created_at ASC
+        messages.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
         res.json(messages);
     } catch (error) {
@@ -27,26 +40,40 @@ const getChatHistory = async (req, res) => {
 // @access  Private
 const getMyChats = async (req, res) => {
     try {
-        const currentUserId = req.user.id;
+        const currentUserId = req.user.uid || req.user._id || req.user.id;
 
-        const [chats] = await db.query(`
-      SELECT DISTINCT m.product_id, p.title as product_title, 
-      IF(m.sender_id = ?, m.receiver_id, m.sender_id) as other_user_id,
-      u.name as other_user_name
-      FROM Messages m
-      JOIN Products p ON m.product_id = p.id
-      JOIN Users u ON u.id = IF(m.sender_id = ?, m.receiver_id, m.sender_id)
-      WHERE m.sender_id = ? OR m.receiver_id = ?
-    `, [currentUserId, currentUserId, currentUserId, currentUserId]);
+        const snapshot = await db.ref('messages').once('value');
+        if (!snapshot.exists()) return res.json([]);
 
-        res.json(chats);
+        let chatMap = {}; // Use a map to mimic DISTINCT by product_id & other_user_id
+
+        for (const [key, msg] of Object.entries(snapshot.val())) {
+            if (msg.sender_id === currentUserId || msg.receiver_id === currentUserId) {
+                const otherUserId = msg.sender_id === currentUserId ? msg.receiver_id : msg.sender_id;
+                const uniqueKey = `${msg.product_id}_${otherUserId}`;
+
+                if (!chatMap[uniqueKey]) {
+                    // We need to fetch product info and other user info manually
+                    const [prodSnap, userSnap] = await Promise.all([
+                        db.ref(`products/${msg.product_id}`).once('value'),
+                        db.ref(`users/${otherUserId}`).once('value')
+                    ]);
+
+                    chatMap[uniqueKey] = {
+                        product_id: msg.product_id,
+                        product_title: prodSnap.exists() ? prodSnap.val().title : 'Unknown Product',
+                        other_user_id: otherUserId,
+                        other_user_name: userSnap.exists() ? userSnap.val().name : 'Unknown User'
+                    };
+                }
+            }
+        }
+
+        res.json(Object.values(chatMap));
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error fetching chats' });
     }
 };
 
-module.exports = {
-    getChatHistory,
-    getMyChats
-};
+export { getChatHistory, getMyChats };

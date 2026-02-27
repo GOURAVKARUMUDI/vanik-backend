@@ -1,10 +1,10 @@
 import { Server } from 'socket.io';
-import Message from './models/Message.js';
+import { db } from './firebaseAdmin.js';
 
 const socketIO = (server) => {
     const io = new Server(server, {
         cors: {
-            origin: 'http://localhost:5173',
+            origin: ['http://localhost:5173', 'https://vanik-kappa.vercel.app'],
             methods: ['GET', 'POST'],
         },
     });
@@ -21,20 +21,26 @@ const socketIO = (server) => {
         // Handle sending message
         socket.on('send_message', async (data) => {
             try {
-                const { sender, receiver, content, room } = data;
+                // Assuming data has sender, receiver, content, and possibly product_id
+                const { sender, receiver, content, room, productId } = data;
 
-                const newMessage = new Message({
-                    sender,
-                    receiver,
+                const newMessageRef = db.ref('messages').push();
+                const messageObj = {
+                    id: newMessageRef.key,
+                    sender_id: sender,
+                    receiver_id: receiver,
                     content,
-                });
+                    product_id: productId || null,
+                    room: room || null,
+                    createdAt: Date.now()
+                };
 
-                await newMessage.save();
+                await newMessageRef.set(messageObj);
 
                 // Emit to the specific room
                 io.to(room).emit('receive_message', data);
             } catch (error) {
-                console.error('Error saving message:', error);
+                console.error('Error saving message to Firebase:', error);
             }
         });
 

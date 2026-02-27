@@ -1,5 +1,4 @@
-import Order from '../models/Order.js';
-import Product from '../models/Product.js';
+import { db } from '../firebaseAdmin.js';
 
 // @desc    Create new order
 // @route   POST /api/orders
@@ -8,35 +7,42 @@ const addOrderItems = async (req, res, next) => {
     try {
         const { product: productId, type, rentalStartDate, rentalEndDate, totalPrice } = req.body;
 
-        const product = await Product.findById(productId);
+        const productRef = db.ref(`products/${productId}`);
+        const productSnapshot = await productRef.once('value');
 
-        if (!product) {
+        if (!productSnapshot.exists()) {
             res.status(404);
             throw new Error('Product not found');
         }
+
+        const product = productSnapshot.val();
 
         if (product.status !== 'Available') {
             res.status(400);
             throw new Error('Product is no longer available');
         }
 
-        const order = new Order({
-            buyer: req.user._id,
+        const newOrderRef = db.ref('orders').push();
+        const orderData = {
+            id: newOrderRef.key,
+            buyer: req.user.uid || req.user._id,
             product: productId,
             type,
-            rentalStartDate,
-            rentalEndDate,
-            totalPrice,
+            rentalStartDate: rentalStartDate || null,
+            rentalEndDate: rentalEndDate || null,
+            totalPrice: Number(totalPrice),
             status: 'Pending',
-        });
+            createdAt: Date.now()
+        };
 
-        const createdOrder = await order.save();
+        await newOrderRef.set(orderData);
 
         // Update product status
-        product.status = type === 'buy' ? 'Sold' : 'Rented';
-        await product.save();
+        await productRef.update({
+            status: type === 'buy' ? 'Sold' : 'Rented'
+        });
 
-        res.status(201).json(createdOrder);
+        res.status(201).json(orderData);
     } catch (error) {
         next(error);
     }
@@ -47,7 +53,28 @@ const addOrderItems = async (req, res, next) => {
 // @access  Private
 const getMyOrders = async (req, res, next) => {
     try {
-        const orders = await Order.find({ buyer: req.user._id }).populate('product');
+        const snapshot = await db.ref('orders').once('value');
+        if (!snapshot.exists()) {
+            return res.json([]);
+        }
+
+        const currentUserId = req.user.uid || req.user._id;
+        let orders = [];
+
+        // Loop through orders and manually populate the product
+        for (const [key, val] of Object.entries(snapshot.val())) {
+            if (val.buyer === currentUserId || (val.buyer && val.buyer.uid === currentUserId)) {
+                // Populate product manually
+                if (val.product) {
+                    const prodSnap = await db.ref(`products/${val.product}`).once('value');
+                    if (prodSnap.exists()) {
+                        val.product = { id: prodSnap.key, ...prodSnap.val() };
+                    }
+                }
+                orders.push({ id: key, ...val });
+            }
+        }
+
         res.json(orders);
     } catch (error) {
         next(error);
@@ -59,12 +86,15 @@ const getMyOrders = async (req, res, next) => {
 // @access  Private
 const updateOrderStatus = async (req, res, next) => {
     try {
-        const order = await Order.findById(req.params.id);
+        const ref = db.ref(`orders/${req.params.id}`);
+        const snapshot = await ref.once('value');
 
-        if (order) {
-            order.status = req.body.status || order.status;
-            const updatedOrder = await order.save();
-            res.json(updatedOrder);
+        if (snapshot.exists()) {
+            const updates = { status: req.body.status || snapshot.val().status };
+            await ref.update(updates);
+
+            const updatedSnap = await ref.once('value');
+            res.json({ id: updatedSnap.key, ...updatedSnap.val() });
         } else {
             res.status(404);
             throw new Error('Order not found');

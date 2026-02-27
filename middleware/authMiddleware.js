@@ -1,5 +1,4 @@
-import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
+import { admin, db } from '../firebaseAdmin.js';
 
 const protect = async (req, res, next) => {
     let token;
@@ -11,25 +10,35 @@ const protect = async (req, res, next) => {
         try {
             token = req.headers.authorization.split(' ')[1];
 
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            // Verify Firebase ID token
+            const decodedToken = await admin.auth().verifyIdToken(token);
+            const uid = decodedToken.uid;
 
-            req.user = await User.findById(decoded.id).select('-password');
+            // Fetch user from RTDB
+            const userSnapshot = await db.ref(`users/${uid}`).once('value');
+            if (userSnapshot.exists()) {
+                req.user = userSnapshot.val();
+
+                // Add _id backward compatibility since some controllers might use req.user._id instead of uid
+                req.user._id = uid;
+            } else {
+                // If they don't have an RTDB profile yet
+                req.user = { uid, _id: uid, email: decodedToken.email };
+            }
 
             next();
         } catch (error) {
-            console.error(error);
+            console.error('Firebase Auth Error:', error);
             res.status(401);
             next(new Error('Not authorized, token failed'));
         }
-    }
-
-    if (!token) {
+    } else {
         res.status(401);
         next(new Error('Not authorized, no token'));
     }
 };
 
-const admin = (req, res, next) => {
+const adminMiddleware = (req, res, next) => {
     if (req.user && req.user.role === 'admin') {
         next();
     } else {
@@ -38,4 +47,4 @@ const admin = (req, res, next) => {
     }
 };
 
-export { protect, admin };
+export { protect, adminMiddleware as admin };

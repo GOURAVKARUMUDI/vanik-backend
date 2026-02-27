@@ -1,7 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import connectDB from './config/db.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 
 import authRoutes from './routes/authRoutes.js';
@@ -12,12 +11,13 @@ import adminRoutes from './routes/adminRoutes.js';
 
 dotenv.config();
 
-connectDB();
-
 const app = express();
 
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'https://vanik-kappa.vercel.app'],
+    origin: [
+        "http://localhost:5173",
+        "https://vanik-kappa.vercel.app"
+    ],
     credentials: true
 }));
 
